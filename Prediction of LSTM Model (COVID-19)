@@ -1,0 +1,192 @@
+####Load Data
+
+! pip install opendatasets
+
+import opendatasets as od
+od.download("https://www.kaggle.com/datasets/yamqwe/omicron-covid19-variant-daily-cases",force=True)
+import os
+data_dir = '.\omicron-covid19-variant-daily-cases'
+os.listdir(data_dir)
+import pandas as pd
+df = pd.read_csv('covid-variants.csv')
+df
+total=df['num_sequences_total'].sum()
+print(total)
+
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+
+df.head()
+
+####EXTRACTION OF REQUIRED COLUMNS FROM ABOVE DATASET
+df.rename(columns ={'location':'country'}, inplace = True)
+df['country'] == 'India'
+rawdata = df[df['country'] == 'India']
+rawdata
+
+import seaborn as sns
+sns.set(color_codes=True)
+
+newdf = rawdata[rawdata['variant'] == 'Omicron']
+newdf
+import seaborn as sns
+sns.set(color_codes=True)
+newdf.info()
+
+####graphical representation
+sns.barplot(newdf['date'], newdf['num_sequences_total'])
+sns.jointplot(newdf['date'], newdf['num_sequences_total'])
+sns.jointplot(newdf['date'], newdf['num_sequences_total'])
+sns.stripplot(newdf['date'], newdf['num_sequences_total'])
+sns.stripplot(newdf['date'], newdf['num_sequences_total'])
+
+####install libraries
+!pip install seaborn
+!pip install numpy
+!pip install pandas
+!pip install matplotlib
+!pip install datetime
+!pip install plotly
+!pip install sklearn
+import seaborn as sns
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import plotly.express as px
+from datetime import datetime
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler , LabelEncoder
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import train_test_split
+###data processing###
+newdf.shape
+newdata= newdf.drop(columns=['country','perc_sequences','variant','num_sequences','date'])
+newdata
+newdata.shape
+sns.pairplot(newdata)
+
+plot=newdata.nlargest(200,'num_sequences_total')
+plot
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+print("Total days in the dataset",len(newdata))
+
+use data until14 days before as training
+x = len(newdata)-14
+x
+train = newdata.iloc[:x]
+train
+train.shape
+test=newdata.iloc[x:]
+test
+test.shape
+
+####scale or normalize data as the data is too skewed
+newdata.plot(figsize=(10,5),title="COVID19 Confirmed Cases")
+newdata.tail(10)
+
+
+!pip install keras
+!pip install tensorflow 
+!pip install sklearn
+from sklearn.preprocessing import MinMaxScaler
+scaler = MinMaxScaler()
+scaler.fit(train)
+train_scaled=scaler.transform(train)
+test_scaled=scaler.transform(test)
+
+#use Timeseriestrain_generator to generate data in sequences.
+#Alternatively we can create our own sequences.
+from keras.preprocessing.sequence import TimeseriesGenerator
+
+#sequences size has an impact on prediction,especially since covid is unpredictable.
+
+seq_size = 4 ## number of steps (lookback).
+n_features = 1 ##number of features (here data is univariate so it is 1)
+train_generator = TimeseriesGenerator(train_scaled,train_scaled,length  = seq_size, batch_size=1)
+ 
+print("Total number of samples in the original training data = ", len(train)) # 30
+print("Total number of samples in the generated data = ", len(train_generator)) # 26 with seq_size=4
+
+#Check data shape from generator
+x,y = train_generator[10]  #Check train_generator
+#Takes 7 days as x and 8th day as y (for seq_size=4)
+
+#Also generate test data
+test_generator = TimeseriesGenerator(test_scaled, test_scaled, length=seq_size, batch_size=1)
+print("Total number of samples in the original training data = ", len(test)) # 14 as we're using last 14 days for test
+print("Total number of samples in the generated data = ", len(test_generator)) # 7
+#Check data shape from generator
+x,y = test_generator[0]
+
+from keras.models import Sequential
+from keras.layers import Dense, LSTM, Dropout, Activation
+
+#Define Model 
+model = Sequential()
+model.add(LSTM(64, activation='relu', return_sequences=True, input_shape=(seq_size, n_features)))
+model.add(LSTM(32, activation='relu'))
+model.add(Dense(16))
+model.add(Dense(1))
+model.compile(optimizer='adam', loss='mean_squared_error')
+model.summary()
+print('Train...')
+
+history = model.fit_generator(train_generator,validation_data=test_generator,
+                             epochs=40,steps_per_epoch=10)
+
+#plot the training and validation accuracy and loss at each epoch
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+epochs = range(1, len(loss) + 1)
+plt.plot(epochs, loss, 'y', label='Training loss')
+plt.plot(epochs, val_loss, 'r', label='Validation loss')
+plt.title('Training and validation loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+#forecast
+prediction = [] #Empty list to populate later with predictions
+
+current_batch = train_scaled[-seq_size:] #Final data points in train 
+current_batch = current_batch.reshape(1, seq_size, n_features) #Reshape
+
+## Predict future, beyond test dates
+future = 7 #Days
+for i in range(len(test) + future):
+    current_pred = model.predict(current_batch)[0]
+    prediction.append(current_pred)
+    current_batch = np.append(current_batch[:,1:,:],[[current_pred]],axis=1)
+
+### Inverse transform to before scaling so we get actual numbers
+rescaled_prediction = scaler.inverse_transform(prediction)
+
+time_series_array = test.index  #Get dates for test data
+
+#Add new dates for the forecast period
+for k in range(0, future):
+    time_series_array = time_series_array.append(time_series_array[-1:] )
+
+#Create a dataframe to capture the forecast data
+df_forecast = pd.DataFrame(columns=["actual_confirmed","predicted"], index=time_series_array)
+
+
+df_forecast.loc[:,"predicted"] = rescaled_prediction[:,0]
+df_forecast.loc[:,"actual_confirmed"] = test["num_sequences_total"]
+
+
+df_forecast.loc[:,"predicted"] = rescaled_prediction[:,0]
+df_forecast.loc[:,"actual_confirmed"] = test["num_sequences_total"]
+
+
+
+#Plot
+df_forecast.plot(title="Predictions for next 7 days")
+
+
+
