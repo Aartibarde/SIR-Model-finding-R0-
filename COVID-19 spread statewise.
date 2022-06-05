@@ -1,0 +1,112 @@
+### import libraries
+
+import numpy as np
+import pandas as pd
+import datetime
+import altair as alt
+
+###import data
+import os
+for dirname, _, filenames in os.walk('/kaggle/input'):
+    for filename in filenames:
+        print(os.path.join(dirname, filename))
+
+
+type(datetime.datetime)
+
+c_df=pd.read_csv('/kaggle/input/covid19-in-india/covid_19_india.csv')
+c_df.Date=pd.to_datetime(c_df.Date)
+c_df.shape
+
+c_df.info()
+
+# aggreagate smaller states
+n=15
+topStates=c_df[['State/UnionTerritory','Confirmed']].groupby(['State/UnionTerritory']).max().sort_values('Confirmed')[-n:].index.values
+c_df.loc[~c_df['State/UnionTerritory'].isin(topStates),['State/UnionTerritory']]='Other'
+for f in ['ConfirmedIndianNational','ConfirmedForeignNational']:
+    c_df[f]=c_df[f].str.replace("-","0").astype(int)
+
+c_df=c_df.groupby(['Date','State/UnionTerritory']).sum().reset_index().set_index('Sno')
+
+c_df.columns
+
+#trend since beginning
+total=alt.Chart(c_df[['Date',]+cols_].groupby('Date').agg('max').reset_index()
+                  ).mark_line().transform_fold( cols_
+).transform_calculate(
+    active='datum.Confirmed - datum.Cured'
+).encode(
+    alt.Y('active:Q'),
+#     alt.Color('key:N'),
+    alt.X('Date')
+)
+alt.Chart(c_df[['Date','State/UnionTerritory']+cols_].groupby(['Date','State/UnionTerritory']).agg('max').reset_index()
+                  ).mark_line(
+).transform_fold( 
+    cols_#, groupby=['State/UnionTerritory']
+).transform_calculate(
+    active='datum.Confirmed - datum.Cured'
+).encode(
+    alt.Y('active:Q'),
+    alt.Color('State/UnionTerritory:N'),
+    alt.X('Date:T'),
+    tooltip=['active:Q','Date:T','State/UnionTerritory:N']
+).interactive()
+
+since = datetime.datetime.now() - pd.to_timedelta("30 day")
+
+cols_=['Cured','Deaths','Confirmed']
+df_=c_df[c_df.Date >= since ][['Date','State/UnionTerritory']+cols_]#.set_index(['State/UnionTerritory','Date'])
+baseData=df_[['Date','State/UnionTerritory']].groupby('State/UnionTerritory').agg('min')
+baseData=baseData.merge(df_[['Date','State/UnionTerritory']+cols_]
+               ,on=['Date','State/UnionTerritory'])
+baseData=baseData.set_index('State/UnionTerritory')
+df_=df_.join(baseData[cols_],
+         how='left',
+         on=['State/UnionTerritory'],
+         rsuffix="_base")
+
+for f in cols_:
+     df_[f+'_g']=df_[f]/df_[f+"_base"]*100-100
+
+
+ST_sel=alt.selection_multi(name='ST',fields=['State/UnionTerritory'])
+# SL_sel = alt.selection_multi(name="SL",fields=['Service_Line'])
+ch1=alt.Chart(df_[['Date','State/UnionTerritory']+cols_].groupby('State/UnionTerritory').agg('max').reset_index()
+                  ).mark_bar().transform_fold( cols_
+).encode(
+    alt.X('value:Q'),
+    alt.Color('key:N'),
+    alt.Y('State/UnionTerritory')
+).add_selection(
+ST_sel
+)
+
+growth=alt.Chart(df_).mark_line().encode(
+    alt.X('Date:T'),
+    alt.Y('Confirmed_g:Q'),
+    color='State/UnionTerritory:N',
+    size=alt.value(5),
+    opacity=alt.condition(ST_sel, alt.value(1), alt.value(.3)),
+    tooltip=list(df_.columns)
+).add_selection(
+ST_sel
+)
+
+alt.hconcat(ch1 , growth)
+
+
+
+
+alt.data_transformers.enable(max_rows=None)
+
+
+alt.Chart(df_).mark_line().encode(
+    alt.X('Date:T'),
+    alt.Y('Confirmed_g:Q'),
+    color='State/UnionTerritory:N',
+    size=alt.value(5),
+    opacity=alt.value(.5),
+    tooltip=list(df_.columns)
+).interactive()
