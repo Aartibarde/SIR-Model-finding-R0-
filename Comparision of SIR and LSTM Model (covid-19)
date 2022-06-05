@@ -1,0 +1,193 @@
+####Load Data
+
+import torch
+from torch.autograd import Variable
+import torchvision.transforms as transforms
+import torchvision.datasets as dsets0P
+import pandas as pd
+import matplotlib.pyplot as plt
+import torch.nn as nn
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+
+ilinet_full=pd.read_csv("https://raw.githubusercontent.com/shlizee/Seq2SeqEpidemics/928bd3132156fc5452b3428c1532a75dd66a29fa/data/ILINet.csv")
+#scaler = MinMaxScaler(feature_range=(-1, 1))
+#data=scaler.fit_transform(ilinet_full_seasons['ILITOTAL'].values.reshape(-1, 1))
+
+# Load Dataset
+ 
+ilinet_full_seasons =ilinet_full[0:782]
+data = ilinet_full_seasons['ILITOTAL'].values
+
+#scaler = MinMaxScaler(feature_range=(-1, 1))
+#data=scaler.fit_transform(ilinet_full_seasons['ILITOTAL'].values.reshape(-1, 1))
+
+# format data to be seasonal
+end_weeks=ilinet_full_seasons.index[ilinet_full_seasons['WEEK'] == 39].tolist()
+start_weeks=ilinet_full_seasons.index[ilinet_full_seasons['WEEK'] == 40].tolist()
+
+
+seasons=[]
+for i in range(len(start_weeks)):
+    c=start_weeks[i]
+    seasons.append(data[c:c+52])
+plt.plot(seasons[1])
+seasons=np.vstack(seasons)
+
+####SIR Model on Full Data
+
+from scipy.integrate import odeint
+from scipy import optimize
+
+# The SIR model differential equations.
+def sir_model(y, t, params):
+    S, I, R = y
+    dSdt = -params[1] * S * I / (params[0]*N)
+    dIdt = params[1] * S * I / (params[0]*N) - params[2] * I
+    dRdt = params[2] * I
+    return (dSdt, dIdt, dRdt)
+
+#def balance_model(init,p,t):
+    # Initial conditions vector
+    #y0 = p[0]*N-1, 1, 0
+    #f = lambda y,t: sir_model(y, t, p)
+    #ret = odeint(f, y0, t)
+    #S, I, R = ret.T
+    #a = abs(I-init).tolist()
+    #val=a.index(min(a)) 
+    #t = np.linspace(0, 52, 52)
+    #y0 = S[val], I[val], R[val]
+    #return y0,t
+
+def run_model(init, p):
+    #t = np.linspace(0, 1000, 50000)
+    f = lambda y,t: sir_model(y, t, p)
+    #y0,t = balance_model(init, p,t)
+    #print(y0)
+    y0 = p[0]*N, init, 0
+    ret = odeint(f, y0, t)
+    S, I, R = ret.T
+    return S, I, R,t
+
+def error_fn(real,model):
+    error = real-model
+    error[np.argmax(real)]=error[np.argmax(real)]*1000
+   
+    return error
+def real_mod_comp(p,real):
+    modelS,modelI,modelR,t = run_model(real[0], p)
+    err=error_fn(real,modelI)
+    if p[0]<0 or p[1]<0 or p[2]<0 or p[0]>1:
+        err = err+10**6
+    return err
+
+N=300000000#4500000
+t = np.linspace(0, 52, 52)
+p0=[.5,.7, 1./14]
+fn = lambda p: real_mod_comp(p,seasons[-1])
+(c,kvg) = optimize.leastsq(fn, p0) 
+print(c)
+print(c[1]/c[2] )
+
+S,I1,R,t=run_model(seasons[-1][0], c)
+plt.plot(I1)
+plt.plot(seasons[-1])
+
+###LSTM MODEL
+#training and testing on one state, first 9 seasons is AL
+scaler = MinMaxScaler(feature_range=(-1, 1))
+maxval = seasons.max()
+minval = seasons.min()
+scaleddata = scaler.fit_transform(seasons[0:-1].reshape(-1, 1))
+train_data = torch.FloatTensor(scaleddata).view(-1)
+
+train_window = 52
+
+def create_inout_sequences(input_data, tw):
+    inout_seq = []
+    L = len(input_data)
+    for i in range(L-tw):
+        train_seq = input_data[i:i+tw]
+        train_label = input_data[i+tw:i+tw+1]
+        inout_seq.append((train_seq ,train_label))
+    return inout_seq
+
+train_inout_seq = create_inout_sequences(train_data, train_window)
+plt.plot(train_data)
+
+
+#define model
+class LSTM(nn.Module):
+    def __init__(self, input_size=1, hidden_layer_size=50, output_size=1):
+        super().__init__()
+        self.hidden_layer_size = hidden_layer_size
+
+        self.lstm = nn.LSTM(input_size, hidden_layer_size)
+
+        self.linear = nn.Linear(hidden_layer_size, output_size)
+
+        self.hidden_cell = (torch.zeros(1,1,self.hidden_layer_size),
+                            torch.zeros(1,1,self.hidden_layer_size))
+
+    def forward(self, input_seq):
+        lstm_out, self.hidden_cell = self.lstm(input_seq.view(len(input_seq) ,1, -1), self.hidden_cell)
+        predictions = self.linear(lstm_out.view(len(input_seq), -1))
+        return predictions[-1]
+
+model = LSTM()
+loss_function = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+epochs = 50
+losses=[]
+for i in range(epochs):
+    for seq, labels in train_inout_seq:
+        optimizer.zero_grad()
+        model.hidden_cell = (torch.zeros(1, 1, model.hidden_layer_size),
+                        torch.zeros(1, 1, model.hidden_layer_size))
+        y_pred = model(seq)
+
+        single_loss = loss_function(y_pred, labels)
+        losses.append(single_loss)
+        single_loss.backward()
+        optimizer.step()
+    if i%25 == 1:
+        print(f'epoch: {i:3} loss: {single_loss.item():10.8f}')
+
+print(f'epoch: {i:3} loss: {single_loss.item():10.10f}')
+
+losses=[float(i) for i in losses]
+lossperepoch  =[]
+sep=int(len(losses)/epochs)
+c=0
+for i in range(0,len(losses),sep):
+    lossperepoch.append(sum(losses[c*sep:c*sep+sep]))
+    c=c+1
+plt.plot(range(0,epochs),np.log(lossperepoch))
+np.argmin(lossperepoch)
+
+fut_pred = 52
+
+test_inputs = train_data[-train_window:].tolist()
+
+model.eval()
+
+for i in range(fut_pred):
+    seq = torch.FloatTensor(test_inputs[-train_window:])
+    with torch.no_grad():
+        model.hidden = (torch.zeros(1, 1, model.hidden_layer_size),
+                        torch.zeros(1, 1, model.hidden_layer_size))
+        test_inputs.append(model(seq).item())
+actual_predictions = np.array(test_inputs[train_window:])
+
+unscaled = scaler.inverse_transform(actual_predictions.reshape(-1, 1))
+unscaled
+plt.plot(seasons[-1], label='real data')
+plt.plot(unscaled, label='LSTM predictions')
+plt.plot(I1, label='SIR best fit on all data')
+plt.plot(I1 , label='SIR predictions (given 10 weeks)')
+plt.legend()
+plt.show()
+
+
+
